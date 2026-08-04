@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color: #f8fafc;
+  background: #020617;
+}
+
+body { margin: 0; min-width: 320px; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+.reader-grid{display:grid;grid-template-columns:240px 320px minmax(0,1fr);height:calc(100vh - 160px);border-top:1px solid #1e293b}.reader-grid>aside,.reader-grid>section,.reader-grid>article{overflow:auto;padding:1rem;border-right:1px solid #1e293b}.reader-grid button{display:block;width:100%;padding:.5rem;text-align:left;color:#cbd5e1}.reader-grid .selected,.reader-grid .active{background:#0f172a}.reader-grid h1{font-size:1.8rem}.reader-grid article div{line-height:1.7}.reader-grid img{max-width:100%}@media(max-width:800px){.reader-grid{grid-template-columns:1fr;height:auto}.reader-grid>aside,.reader-grid>section,.reader-grid>article{min-height:180px}}
