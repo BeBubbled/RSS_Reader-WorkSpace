@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     app_session_secret: str = Field(
         default="replace-with-a-long-random-secret-at-least-32-characters"
     )
-    app_encryption_key: str = "replace-with-a-fernet-key-generated-for-this-deployment"
+    # This is a valid development-only Fernet key so a first-run setup can save
+    # credentials. Production still refuses to boot until it is replaced.
+    app_encryption_key: str = "lEgmaNLZbLEptAO6glxBrO5g2mES6wB6yMyGH0MnbE="
     session_cookie_secure: bool = False
     session_cookie_max_age_seconds: int = 60 * 60 * 24 * 7
     database_url: str = "postgresql+asyncpg://rss_ai:change-this-postgres-password@postgres:5432/rss_ai"
@@ -35,7 +37,7 @@ class Settings(BaseSettings):
                 raise ValueError("ADMIN_PASSWORD must be changed in production")
             if self.app_session_secret == "replace-with-a-long-random-secret-at-least-32-characters":
                 raise ValueError("APP_SESSION_SECRET must be changed in production")
-            if self.app_encryption_key == "replace-with-a-fernet-key-generated-for-this-deployment":
+            if self.app_encryption_key == "lEgmaNLZbLEptAO6glxBrO5g2mES6wB6yMyGH0MnbE=":
                 raise ValueError("APP_ENCRYPTION_KEY must be changed in production")
         return self
 

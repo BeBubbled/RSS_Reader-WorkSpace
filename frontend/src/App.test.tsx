@@ -22,5 +22,5 @@ test("shows the application shell for an authenticated user", async () => {
     .mockResolvedValueOnce(new Response(JSON.stringify({ username: "admin" }), { status: 200 }))
     .mockResolvedValueOnce(new Response(JSON.stringify({ status: "phase-0", user: "admin" }), { status: 200 }));
   render(<QueryClientProvider client={new QueryClient()}><App /></QueryClientProvider>);
-  expect(await screen.findByText("三栏阅读器")).toBeInTheDocument();
+  expect(await screen.findByText("资料库")).toBeInTheDocument();
 });

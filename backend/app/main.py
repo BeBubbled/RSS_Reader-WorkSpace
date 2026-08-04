@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +20,7 @@ from app.dependencies import database_ready, redis_ready
 from app.database import get_session
 from app.models import Feed, Folder, FreshRSSConnection
 from app.freshrss import GoogleReaderClient, decrypt_secret, encrypt_secret, sync_connection
+from app.opml import export_opml, import_opml
 from pydantic import BaseModel, Field
 from app.reader import (
     EntryListOut,
@@ -49,7 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             CORSMiddleware,
             allow_origins=app_settings.allowed_origins,
             allow_credentials=True,
-            allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             allow_headers=["Content-Type"],
         )
 
@@ -95,15 +96,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         sync_interval: int = Field(default=900, ge=60, le=86400)
 
     class FreshRSSOut(BaseModel):
-        id: uuid.UUID; base_url: str; username: str; sync_interval: int; last_sync_at: object | None; status: str
+        id: uuid.UUID; base_url: str; username: str; sync_interval: int; last_sync_at: object | None; status: str; last_error: str | None = None
 
     @app.get("/api/freshrss/status", response_model=list[FreshRSSOut])
     async def freshrss_status(user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)) -> list[FreshRSSConnection]:
         return list((await session.scalars(select(FreshRSSConnection).order_by(FreshRSSConnection.created_at))).all())
 
     @app.post("/api/freshrss/test")
-    async def test_freshrss(payload: FreshRSSInput, user: CurrentUser = Depends(get_current_user)) -> dict[str, str]:
-        client = GoogleReaderClient(payload.base_url, payload.username, payload.api_password); await client.login(); return {"status": "ok"}
+    async def test_freshrss(payload: FreshRSSInput, user: CurrentUser = Depends(get_current_user)) -> dict[str, object]:
+        client = GoogleReaderClient(payload.base_url, payload.username, payload.api_password)
+        await client.login()
+        # Checking the subscription endpoint catches the common case where a
+        # normal FreshRSS web password was entered instead of an API password.
+        subscriptions = await client.subscriptions()
+        return {"status": "ok", "subscription_count": len(subscriptions)}
 
     @app.post("/api/freshrss/connections", response_model=FreshRSSOut)
     async def create_freshrss_connection(payload: FreshRSSInput, user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)) -> FreshRSSConnection:
@@ -130,6 +136,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         connections = list((await session.scalars(query)).all())
         if not connections: raise HTTPException(status_code=404, detail="FreshRSS connection not found")
         return [await sync_connection(session, item, max_entries) for item in connections]
+
+    @app.post("/api/opml/import")
+    async def opml_import(payload: str = Body(..., media_type="application/xml"), user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)) -> dict[str, int]:
+        if len(payload.encode()) > 5_000_000:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="OPML file is too large")
+        try:
+            return await import_opml(session, payload)
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+
+    @app.get("/api/opml/export")
+    async def opml_export(user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)) -> Response:
+        return Response(await export_opml(session), media_type="text/x-opml; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="rss-ai.opml"'})
 
     @app.get("/api/folders", response_model=list[FolderOut])
     async def folders(
@@ -285,7 +304,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             else: session.add(AppSetting(key=key,value_json=json.dumps(value)))
         await session.commit();return await ai_settings(user,session)
     @app.get("/api/workflows")
-    async def workflows(user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->list[dict]: return [{"id":str(x.id),"name":x.name,"enabled":x.enabled,"schedule_config_json":json.loads(x.schedule_config_json)} for x in (await session.scalars(select(Workflow))).all()]
+    async def workflows(user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->list[dict]:
+        await seed_functions(session)
+        return [{"id":str(x.id),"name":x.name,"enabled":x.enabled,"schedule_config_json":json.loads(x.schedule_config_json)} for x in (await session.scalars(select(Workflow))).all()]
 
     return app
 

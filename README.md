@@ -1,88 +1,64 @@
 # RSS-AI
 
-RSS-AI 是一个面向单用户的 AI RSS 阅读器。FreshRSS 仍是订阅和原始文章的唯一数据源；本仓库的 Phase 0 仅提供可部署的基础工程、单用户登录、健康检查、数据库迁移链和后台任务运行时。
+单用户、自托管的 RSS 阅读器。FreshRSS 负责订阅与原文；RSS-AI 提供三栏阅读、OPML、异步 AI 处理和应用内通知。
 
-## 当前阶段
-
-已具备：FastAPI、React/Vite、PostgreSQL、Redis、Celery、Alembic、Caddy 反向代理、会话认证与 CI。
-
-尚未实现：FreshRSS 同步、文章阅读器、AI Provider、翻译、总结与简报。这些内容从 Phase 1 起逐步交付。
-
-## 支持的平台
-
-- Linux AMD64 (`linux/amd64`)
-- Linux ARM64 (`linux/arm64`)
-
-核心服务不依赖 CUDA、AVX 或任何本地 AI 模型容器。后续的 Ollama、LibreTranslate 等本地 Provider 会通过 HTTP 接入，且其硬件支持取决于所选 Provider，而非 RSS-AI 核心服务。
-
-## 快速开始
-
-1. 安装 Docker Engine 与 Docker Compose Plugin。
-2. 复制配置并替换全部示例 Secret：
-
-   ```bash
-   cp .env.example .env
-   ```
-
-3. 启动服务：
-
-   ```bash
-   docker compose up -d --build
-   ```
-
-4. 打开 `http://localhost:8080`，使用 `.env` 中的 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 登录。
-
-首次启动会运行 `alembic upgrade head`。PostgreSQL 和 Redis 只在 Docker 内部网络中可访问；唯一暴露的服务是 Caddy。
-
-登录后可在页面顶部的 **FreshRSS 设置** 中填写 FreshRSS 地址、用户名和 Google Reader API 密码。先使用“测试连接”验证凭据，再保存连接并执行“立即同步”。Celery Scheduler 每分钟检查连接；达到各连接配置的同步间隔后，会自动执行一次增量同步。
-
-## 健康检查
-
-- `GET /health`：API 进程存活。
-- `GET /ready`：PostgreSQL 与 Redis 可用。
-
-两者都可通过 Caddy 访问，例如 `http://localhost:8080/ready`。AI Provider 的将来状态不会影响这两个核心端点。
-
-## 本地开发与测试
-
-后端：
+## 启动
 
 ```bash
-cd backend
-python -m pip install -e '.[dev]'
-pytest
+cp .env.example .env
+docker compose up -d --build
 ```
 
-前端：
+打开 `http://localhost:8080`，使用 `.env` 中的管理员账户登录。首次启动会执行 Alembic 迁移。PostgreSQL 与 Redis 不映射到宿主机；Caddy 是唯一入口。
+
+## FreshRSS 同步
+
+1. 在左栏底部展开“连接与同步”。
+2. 输入 **FreshRSS 本身的地址**，而不是 RSS-AI 地址。例如 FreshRSS 位于 `http://server:8081/` 时填写该地址；`http://server:8084/` 若显示 RSS-AI 登录页，则不能填写在这里。
+3. 输入 FreshRSS 用户名和在 FreshRSS 中启用 Google Reader API 后取得的 API 密码。
+4. 点击“测试连接”；成功时会显示发现的订阅源数。点击“保存并同步”后，左栏会立即刷新文件夹和订阅源。
+
+每个连接也会由 Celery Scheduler 按设置的同步间隔自动同步。同步失败时，连接条目会显示已脱敏的错误信息；密码和 API Key 永远不返回给浏览器。
+
+## OPML
+
+“连接与同步”中可以导入或导出 OPML：
+
+- 导入会把文件夹和订阅源加入 RSS-AI 的资料库，不上传到第三方。
+- 导出会包含 RSS-AI 已知的本地订阅和 FreshRSS 已同步的订阅，适合作为备份或迁移文件。
+
+OPML 只携带订阅元数据；若要下载文章，请连接 FreshRSS 并完成同步。
+
+## AI 设置
+
+左栏底部的“AI 设置与任务”提供：
+
+- OpenAI-compatible、Ollama、DeepL、LibreTranslate、Google Cloud Translation Provider 配置与测试；
+- Provider 下的模型登记；内置函数、工作流、最近任务和应用内通知；
+- 打开文章自动翻译/总结开关与月度预算设置。
+
+AI 任务由 Celery 异步处理，原文阅读不依赖 Provider。配置了带 `input_per_million` / `output_per_million` 价格的模型后，月度预算会在新任务提交时硬性拦截超额请求。
+
+## 开发验证
 
 ```bash
-cd frontend
-corepack enable
-pnpm install --frozen-lockfile
-pnpm run test:run
-pnpm run build
+cd backend && python -m pip install -e '.[dev]' && pytest
+cd frontend && pnpm install --frozen-lockfile && pnpm run test:run && pnpm run build
 ```
 
-## 多架构镜像发布
-
-本地 `docker compose build` 会为当前主机架构构建镜像。发布到镜像仓库时使用 Buildx 创建同一标签下的多架构 manifest：
+## 多架构镜像
 
 ```bash
-docker buildx create --name rss-ai-builder --use
-docker buildx inspect --bootstrap
-
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t <registry>/rss-ai-api:<version> -t <registry>/rss-ai-api:latest --push ./backend
-
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t <registry>/rss-ai-web:<version> -t <registry>/rss-ai-web:latest --push ./frontend
+docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/rss-ai-api:<version> --push ./backend
+docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/rss-ai-web:<version> --push ./frontend
 ```
 
-CI 使用 QEMU 构建两个平台，但正式发布前仍应在真实 ARM64 Linux 设备上执行集成测试。
+QEMU/Buildx 的 ARM64 构建只验证镜像可构建；发布前仍应在真实 ARM64 Linux 主机执行 Compose 集成验收。
 
-## 安全说明
+## 安全
 
-- 不要提交 `.env`，并在生产环境中更换管理员密码、PostgreSQL 密码和会话密钥。
-- `APP_ENVIRONMENT=production` 时，示例管理员密码与会话密钥会导致应用拒绝启动。
-- 在 HTTPS 反向代理后部署时，将 `SESSION_COOKIE_SECURE=true`；若跨域部署，明确设置 `APP_ALLOWED_ORIGINS`。
-- 应用不会把凭据写入 API 响应或日志。
+生产部署必须替换管理员密码、会话密钥、PostgreSQL 密码和 `APP_ENCRYPTION_KEY`。生成 Fernet 密钥：
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```

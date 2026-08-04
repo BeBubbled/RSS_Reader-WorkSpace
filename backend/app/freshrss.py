@@ -22,7 +22,14 @@ STARRED_TAG = "user/-/state/com.google/starred"
 
 def crypt() -> Fernet:
     try:
-        return Fernet(get_settings().app_encryption_key.encode())
+        settings = get_settings()
+        key = settings.app_encryption_key
+        # Older Phase 0 .env files used this explanatory placeholder. Keep a
+        # development upgrade path instead of making FreshRSS setup silently
+        # impossible; production validation still rejects it.
+        if key == "replace-with-a-fernet-key-generated-for-this-deployment" and settings.app_environment.lower() != "production":
+            key = "lEgmaNLZbLEptAO6glxBrO5g2mES6wB6yMyGH0MnbE="
+        return Fernet(key.encode())
     except ValueError as error:
         raise HTTPException(status_code=500, detail="APP_ENCRYPTION_KEY is invalid") from error
 
@@ -118,4 +125,11 @@ async def sync_connection(session: AsyncSession, connection: FreshRSSConnection,
             if not continuation: break
         connection.last_sync_at, connection.status = datetime.now(UTC), "ok"; await session.commit(); return counts
     except Exception:
-        connection.status = "error"; await session.commit(); raise
+        # Credentials are deliberately never persisted in diagnostics.
+        connection.status = "error"
+        # The message is useful to the owner (wrong URL/API password) but strip
+        # all URL credentials and cap it before writing it to the database.
+        message = str(__import__("sys").exception() or "FreshRSS synchronization failed")
+        connection.last_error = re.sub(r"https?://[^\s/@]+:[^\s/@]+@", "https://***:***@", message)[:500]
+        await session.commit()
+        raise
