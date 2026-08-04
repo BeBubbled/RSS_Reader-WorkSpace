@@ -34,5 +34,5 @@ export default function App() {
     return <main className="grid min-h-screen place-items-center bg-slate-950 text-slate-300">正在恢复会话…</main>;
   }
   if (!user) return <LoginPage onSubmit={login} />;
-  return <><AppShell user={user} status={status.data ?? null} onLogout={logout} /><FreshRSSSettings /><Reader /></>;
+  return <main className="min-h-screen bg-slate-950 text-slate-100"><AppShell user={user} status={status.data ?? null} onLogout={logout} /><details className="settings-panel"><summary>FreshRSS 设置与同步</summary><FreshRSSSettings /></details><Reader /></main>;
 }
