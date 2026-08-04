@@ -24,7 +24,6 @@ export function Reader() {
   const entries = useQuery({ queryKey: ["entries", source], queryFn: () => api.getEntries(source) }); const article = useQuery({ queryKey: ["entry", selected], queryFn: () => api.getEntry(selected!), enabled: !!selected });
   const sourceItems = [...(Array.isArray(folders.data) ? folders.data : []).map((x) => ({ kind: "folder" as const, id: x.id, label: x.name })), ...(Array.isArray(feeds.data) ? feeds.data : []).map((x) => ({ kind: "feed" as const, id: x.id, label: x.title }))];
   const entryItems = Array.isArray(entries.data?.items) ? entries.data.items : [];
-  useEffect(() => { if (!source && sourceItems[0]) setSource(sourceItems[0]); }, [source, sourceItems.length]);
   useEffect(() => { setSelected(entryItems[0]?.id); }, [source?.id, entryItems.map((x) => x.id).join(",")]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if ((event.target as HTMLElement)?.matches("input,textarea,select,[contenteditable=true]") || event.altKey || event.ctrlKey || event.metaKey) return;
