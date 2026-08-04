@@ -33,8 +33,8 @@ from app.reader import (
     list_entries,
     save_reading_position,
 )
-from app.ai import DigestIn, FunctionIn, ModelIn, PolicyIn, ProviderIn, provider_out, queue_entry_job, seed_functions
-from app.models import AIArtifact, AIFunction, AIJob, AIModel, AIProvider, Notification, RoutingPolicy, Workflow
+from app.ai import DigestIn, FunctionIn, ModelIn, PolicyIn, ProviderIn, provider_out, queue_digest_job, queue_entry_job, seed_functions
+from app.models import AIArtifact, AIFunction, AIJob, AIModel, AIProvider, AppSetting, Notification, RoutingPolicy, Workflow
 import json
 
 
@@ -109,6 +109,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def create_freshrss_connection(payload: FreshRSSInput, user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)) -> FreshRSSConnection:
         item = FreshRSSConnection(base_url=payload.base_url.rstrip("/"), username=payload.username, encrypted_api_password=encrypt_secret(payload.api_password), sync_interval=payload.sync_interval)
         session.add(item); await session.commit(); await session.refresh(item); return item
+
+    @app.patch("/api/freshrss/connections/{connection_id}", response_model=FreshRSSOut)
+    async def update_freshrss_connection(connection_id: uuid.UUID, payload: FreshRSSInput, user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)) -> FreshRSSConnection:
+        item = await session.get(FreshRSSConnection, connection_id)
+        if not item: raise HTTPException(status_code=404, detail="FreshRSS connection not found")
+        item.base_url, item.username, item.encrypted_api_password, item.sync_interval = payload.base_url.rstrip("/"), payload.username, encrypt_secret(payload.api_password), payload.sync_interval
+        await session.commit(); await session.refresh(item); return item
+
+    @app.delete("/api/freshrss/connections/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_freshrss_connection(connection_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)) -> None:
+        item = await session.get(FreshRSSConnection, connection_id)
+        if not item: raise HTTPException(status_code=404, detail="FreshRSS connection not found")
+        await session.delete(item); await session.commit()
 
     @app.post("/api/freshrss/sync")
     async def sync_freshrss(connection_id: uuid.UUID | None = None, max_entries: int = Query(default=2000, ge=1, le=5000), user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)) -> list[dict[str, int]]:
@@ -238,10 +251,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         x=await session.get(AIJob,job_id)
         if not x: raise HTTPException(404,"Job not found")
         x.status="cancelled";await session.commit();return {"status":x.status}
+    @app.post("/api/ai/jobs/{job_id}/retry")
+    async def retry(job_id:uuid.UUID,user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->dict:
+        x=await session.get(AIJob,job_id)
+        if not x: raise HTTPException(404,"Job not found")
+        x.status="queued";x.error_json=None;await session.commit()
+        from app.worker import execute_ai_job
+        execute_ai_job.delay(str(x.id));return {"job_id":str(x.id)}
+    @app.post("/api/ai/digests")
+    async def digest(payload:DigestIn,user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->dict:
+        query=select(Entry).order_by(Entry.published_at.desc()).limit(max(1,min(payload.limit,100)))
+        if payload.entry_ids: query=query.where(Entry.id.in_(payload.entry_ids))
+        elif payload.feed_id: query=query.where(Entry.feed_id==payload.feed_id)
+        elif payload.folder_id: query=query.join(Feed).where(Feed.folder_id==payload.folder_id)
+        items=list((await session.scalars(query)).all())
+        if not items: raise HTTPException(422,"No articles selected")
+        return {"job_id":str((await queue_digest_job(session,items,payload.workflow_name)).id),"article_count":len(items)}
     @app.get("/api/entries/{entry_id}/artifacts")
     async def artifacts(entry_id:uuid.UUID,user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->list[dict]: return [{"id":str(x.id),"artifact_type":x.artifact_type,"language":x.language,"content_markdown":x.content_markdown,"content_json":x.content_json} for x in (await session.scalars(select(AIArtifact).where(AIArtifact.entry_id==entry_id,AIArtifact.is_current==True))).all()]
     @app.get("/api/notifications")
     async def notifications(user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->list[dict]: return [{"id":str(x.id),"title":x.title,"body":x.body,"is_read":x.is_read} for x in (await session.scalars(select(Notification).order_by(Notification.created_at.desc()))).all()]
+    @app.get("/api/settings/ai")
+    async def ai_settings(user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->dict:
+        result = await session.scalars(select(AppSetting).where(AppSetting.key.in_(["auto_translate", "auto_summary", "monthly_ai_budget"])))
+        return {item.key: json.loads(item.value_json) for item in result.all()}
+    @app.put("/api/settings/ai")
+    async def put_ai_settings(payload:dict,user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->dict:
+        allowed={"auto_translate","auto_summary","monthly_ai_budget"}
+        for key,value in payload.items():
+            if key not in allowed: continue
+            row=await session.get(AppSetting,key)
+            if row: row.value_json=json.dumps(value)
+            else: session.add(AppSetting(key=key,value_json=json.dumps(value)))
+        await session.commit();return await ai_settings(user,session)
+    @app.get("/api/workflows")
+    async def workflows(user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->list[dict]: return [{"id":str(x.id),"name":x.name,"enabled":x.enabled,"schedule_config_json":json.loads(x.schedule_config_json)} for x in (await session.scalars(select(Workflow))).all()]
 
     return app
 

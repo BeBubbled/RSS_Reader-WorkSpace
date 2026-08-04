@@ -4,6 +4,7 @@ export type Folder = { id: string; name: string };
 export type Feed = { id: string; title: string; folder_id: string | null; site_url: string | null };
 export type Entry = { id: string; feed_id: string; title: string; url: string | null; author: string | null; published_at: string; content_html: string; content_text: string | null; is_read: boolean; is_starred: boolean; reading_position: number };
 export type EntryList = { items: Entry[]; next_cursor: string | null };
+export type FreshRSSConnection = { id: string; base_url: string; username: string; sync_interval: number; last_sync_at: string | null; status: string };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -34,4 +35,8 @@ export const api = {
   ,getEntry: (id: string) => request<Entry>(`/api/entries/${id}`)
   ,patchState: (id: string, body: Partial<Pick<Entry, "is_read" | "is_starred">>) => request<Entry>(`/api/entries/${id}/state`, { method: "PATCH", body: JSON.stringify(body) })
   ,savePosition: (id: string, scroll_ratio: number) => request<Entry>(`/api/entries/${id}/reading-position`, { method: "PATCH", body: JSON.stringify({ scroll_ratio }) })
+  ,getFreshRSSStatus: () => request<FreshRSSConnection[]>("/api/freshrss/status")
+  ,testFreshRSS: (body: { base_url: string; username: string; api_password: string; sync_interval: number }) => request<{ status: string }>("/api/freshrss/test", { method: "POST", body: JSON.stringify(body) })
+  ,createFreshRSS: (body: { base_url: string; username: string; api_password: string; sync_interval: number }) => request<FreshRSSConnection>("/api/freshrss/connections", { method: "POST", body: JSON.stringify(body) })
+  ,syncFreshRSS: (connectionId?: string) => request<unknown[]>(`/api/freshrss/sync${connectionId ? `?connection_id=${connectionId}` : ""}`, { method: "POST" })
 };

@@ -6,6 +6,7 @@ import { AppShell } from "./components/AppShell";
 import { LoginPage } from "./components/LoginPage";
 import { useAuthStore } from "./stores/auth";
 import { Reader } from "./components/Reader";
+import { FreshRSSSettings } from "./components/FreshRSSSettings";
 
 export default function App() {
   const { user, isLoading, setUser, setLoading } = useAuthStore();
@@ -33,5 +34,5 @@ export default function App() {
     return <main className="grid min-h-screen place-items-center bg-slate-950 text-slate-300">正在恢复会话…</main>;
   }
   if (!user) return <LoginPage onSubmit={login} />;
-  return <><AppShell user={user} status={status.data ?? null} onLogout={logout} /><Reader /></>;
+  return <><AppShell user={user} status={status.data ?? null} onLogout={logout} /><FreshRSSSettings /><Reader /></>;
 }

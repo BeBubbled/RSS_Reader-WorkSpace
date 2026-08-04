@@ -34,6 +34,8 @@ RSS-AI 是一个面向单用户的 AI RSS 阅读器。FreshRSS 仍是订阅和�
 
 首次启动会运行 `alembic upgrade head`。PostgreSQL 和 Redis 只在 Docker 内部网络中可访问；唯一暴露的服务是 Caddy。
 
+登录后可在页面顶部的 **FreshRSS 设置** 中填写 FreshRSS 地址、用户名和 Google Reader API 密码。先使用“测试连接”验证凭据，再保存连接并执行“立即同步”。Celery Scheduler 每分钟检查连接；达到各连接配置的同步间隔后，会自动执行一次增量同步。
+
 ## 健康检查
 
 - `GET /health`：API 进程存活。

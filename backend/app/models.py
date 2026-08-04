@@ -171,6 +171,14 @@ class AIArtifact(Base):
     is_current: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class AIJobEntry(Base):
+    __tablename__ = "ai_job_entries"
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ai_jobs.id"), primary_key=True)
+    entry_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("entries.id"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    intermediate_result_json: Mapped[str | None] = mapped_column(Text)
+
+
 class Workflow(Base):
     __tablename__ = "workflows"
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
