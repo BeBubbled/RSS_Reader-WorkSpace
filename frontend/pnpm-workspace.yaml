@@ -1,2 +1,5 @@
+# Vite relies on esbuild's install script to download its platform-specific binary.
+# Explicitly approve this known build dependency so pnpm 10+ builds work
+# consistently on both amd64 and arm64 Docker hosts.
 allowBuilds:
   esbuild: true
