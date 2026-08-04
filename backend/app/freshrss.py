@@ -4,7 +4,7 @@ import hashlib
 import re
 import uuid
 from datetime import UTC, datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import bleach
 import httpx
@@ -51,8 +51,33 @@ def normalized_hash(title: str, html: str) -> tuple[str, str]:
     return text, hashlib.sha256(normalized.encode()).hexdigest()
 
 
+def fresh_rss_error(error: Exception) -> HTTPException:
+    """Return a safe, actionable error for a FreshRSS network/API failure."""
+    if isinstance(error, HTTPException):
+        return error
+    if isinstance(error, httpx.HTTPStatusError):
+        code = error.response.status_code
+        if code in (401, 403):
+            detail = "FreshRSS rejected the username or Google Reader API password"
+        elif code == 404:
+            detail = "FreshRSS Google Reader API was not found at this URL; check the FreshRSS base URL and enable its API"
+        else:
+            detail = f"FreshRSS returned HTTP {code}"
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
+    if isinstance(error, httpx.TimeoutException):
+        return HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="FreshRSS request timed out")
+    if isinstance(error, httpx.RequestError):
+        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Cannot reach FreshRSS at the configured URL")
+    if isinstance(error, ValueError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="FreshRSS returned an invalid API response")
+    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="FreshRSS synchronization failed")
+
+
 class GoogleReaderClient:
     def __init__(self, base_url: str, username: str, password: str) -> None:
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="FreshRSS URL must start with http:// or https://")
         self.base_url = base_url.rstrip("/") + "/"
         self.username, self.password, self.token = username, password, None
 
@@ -60,9 +85,12 @@ class GoogleReaderClient:
         return urljoin(self.base_url, path.lstrip("/"))
 
     async def login(self) -> None:
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(self.endpoint("api/greader.php/accounts/ClientLogin"), data={"Email": self.username, "Passwd": self.password, "service": "reader"})
-            response.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.post(self.endpoint("api/greader.php/accounts/ClientLogin"), data={"Email": self.username, "Passwd": self.password, "service": "reader"})
+                response.raise_for_status()
+        except Exception as error:
+            raise fresh_rss_error(error) from error
         auth = next((line[5:] for line in response.text.splitlines() if line.startswith("Auth=")), None)
         if not auth:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FreshRSS did not return a Google Reader token")
@@ -72,10 +100,13 @@ class GoogleReaderClient:
         if not self.token:
             await self.login()
         clean_params = {key: value for key, value in (params or {}).items() if value is not None}
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(self.endpoint(path), params=clean_params, headers={"Authorization": f"GoogleLogin auth={self.token}"})
-            response.raise_for_status()
-            return response.json()
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(self.endpoint(path), params=clean_params, headers={"Authorization": f"GoogleLogin auth={self.token}"})
+                response.raise_for_status()
+                return response.json()
+        except Exception as error:
+            raise fresh_rss_error(error) from error
 
     async def subscriptions(self) -> list[dict]:
         return (await self.get("api/greader.php/reader/api/0/subscription/list", {"output": "json"})).get("subscriptions", [])
@@ -124,12 +155,12 @@ async def sync_connection(session: AsyncSession, connection: FreshRSSConnection,
             continuation = payload.get("continuation")
             if not continuation: break
         connection.last_sync_at, connection.status = datetime.now(UTC), "ok"; await session.commit(); return counts
-    except Exception:
+    except Exception as error:
         # Credentials are deliberately never persisted in diagnostics.
         connection.status = "error"
         # The message is useful to the owner (wrong URL/API password) but strip
         # all URL credentials and cap it before writing it to the database.
-        message = str(__import__("sys").exception() or "FreshRSS synchronization failed")
+        message = fresh_rss_error(error).detail
         connection.last_error = re.sub(r"https?://[^\s/@]+:[^\s/@]+@", "https://***:***@", message)[:500]
         await session.commit()
         raise
