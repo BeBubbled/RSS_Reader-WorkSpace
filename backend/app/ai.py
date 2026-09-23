@@ -6,12 +6,17 @@ import json
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 from fastapi import HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.freshrss import decrypt_secret
 from app.models import AIArtifact, AIFunction, AIJob, AIJobEntry, AIModel, AIProvider, AppSetting, Entry, Notification, RoutingPolicy, Workflow
+
+TRANSLATION_PROVIDER_TYPES = {"deepl", "libretranslate", "google_cloud_translation"}
+LLM_PROVIDER_TYPES = {"openai_compatible", "openai", "ollama"}
 
 BUILT_INS = {
     "single_article_summary": ("单篇总结", "summarize", "用中文简洁总结以下文章：\n{content}"),
@@ -22,6 +27,27 @@ BUILT_INS = {
     "selected_articles_summary": ("多文章简报", "summarize", "将以下多篇文章整理成中文 Markdown 简报；每条结论标明来源标题：\n{content}"),
 }
 DEFAULT_WORKFLOWS = ("selected_articles_summary", "recent_articles_digest", "feed_digest", "folder_digest", "event_digest")
+
+
+def model_supports(model: AIModel, capability: str) -> bool:
+    """Whether a model declares the requested capability.
+
+    ``capability`` uses a dot-namespace (e.g. ``translate.en_to_zh``), so a
+    model that declares the broad ``translate`` capability still satisfies a
+    specific language target.
+    """
+    declared = json.loads(model.capabilities_json or "[]")
+    return any(capability == item or capability.startswith(f"{item}.") for item in declared)
+
+
+async def get_translation_target(session: AsyncSession) -> str:
+    """Target language for translation jobs, defaulting to Simplified Chinese."""
+    setting = await session.get(AppSetting, "translation_target_language")
+    if not setting:
+        return "zh"
+    value = json.loads(setting.value_json)
+    return value if isinstance(value, str) and value else "zh"
+
 
 class ProviderIn(BaseModel):
     name: str; provider_type: str; base_url: str | None = None; api_key: str | None = None; enabled: bool = True; timeout_seconds: int = 60; concurrency_limit: int = Field(default=2, ge=1, le=32); platform_capabilities_json: dict = Field(default_factory=dict)
@@ -37,6 +63,43 @@ class DigestIn(BaseModel):
 def provider_out(provider: AIProvider) -> dict:
     """The encrypted key is deliberately omitted from every response."""
     return {"id": str(provider.id), "name": provider.name, "provider_type": provider.provider_type, "base_url": provider.base_url, "enabled": provider.enabled, "health_status": provider.health_status, "timeout_seconds": provider.timeout_seconds, "concurrency_limit": provider.concurrency_limit, "platform_capabilities_json": json.loads(provider.platform_capabilities_json or "{}")}
+
+
+async def test_provider_connection(provider: AIProvider) -> tuple[bool, str]:
+    """Make one real, minimal request to verify a provider is reachable.
+
+    Never logs or returns the API key; network and HTTP failures are reduced to
+    short, safe messages.
+    """
+    key = decrypt_secret(provider.encrypted_api_key) if provider.encrypted_api_key else None
+    base = (provider.base_url or "").rstrip("/")
+    if not base:
+        return False, "Provider base URL is not set"
+    try:
+        async with httpx.AsyncClient(timeout=min(provider.timeout_seconds, 20)) as client:
+            if provider.provider_type in {"openai_compatible", "openai"}:
+                response = await client.get(f"{base}/v1/models", headers={"Authorization": f"Bearer {key}"} if key else {})
+            elif provider.provider_type == "ollama":
+                response = await client.get(f"{base}/api/tags")
+            elif provider.provider_type == "libretranslate":
+                response = await client.post(f"{base}/translate", json={"q": "ping", "source": "auto", "target": "en", "format": "text", "api_key": key or ""})
+            elif provider.provider_type == "deepl":
+                response = await client.post(f"{base}/v2/usage", headers={"Authorization": f"DeepL-Auth-Key {key}"} if key else {})
+            elif provider.provider_type == "google_cloud_translation":
+                response = await client.post(f"{base}/v2", params={"key": key}, json={"q": "ping", "target": "en"})
+            else:
+                return False, f"Unsupported provider type {provider.provider_type}"
+            if response.status_code in (401, 403):
+                return False, f"Provider rejected the API key (HTTP {response.status_code})"
+            if response.status_code >= 400:
+                return False, f"Provider returned HTTP {response.status_code}"
+            return True, "Connection successful"
+    except httpx.TimeoutException:
+        return False, "Provider request timed out"
+    except httpx.RequestError:
+        return False, "Cannot reach provider at the configured URL"
+    except Exception as error:
+        return False, str(error)[:200]
 
 async def seed_functions(session: AsyncSession) -> None:
     for key, (name, capability, prompt) in BUILT_INS.items():

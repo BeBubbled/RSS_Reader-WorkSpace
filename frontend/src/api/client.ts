@@ -8,7 +8,7 @@ export type FreshRSSConnection = { id: string; base_url: string; username: strin
 export type AIProvider = { id: string; name: string; provider_type: string; base_url: string | null; enabled: boolean; health_status: string; timeout_seconds: number; concurrency_limit: number };
 export type AIModel = { id: string; provider_id: string; model_key: string; display_name: string; capabilities_json: string[]; enabled: boolean };
 export type AIFunction = { id: string; name: string; function_key: string; capability: string; prompt_version: number; enabled: boolean };
-export type AIJob = { id: string; status: string; progress: number; estimated_cost: number; error_json: string | null };
+export type AIJob = { id: string; status: string; progress: number; estimated_cost: number; error_json: string | null; provider_id?: string | null; model_id?: string | null };
 export type Notification = { id: string; title: string; body: string; is_read: boolean };
 export type AIArtifact = { id: string; artifact_type: string; language: string | null; content_markdown: string | null; content_json: string | null };
 
@@ -62,4 +62,7 @@ export const api = {
   ,summarizeEntry: (id: string) => request<{ job_id: string }>(`/api/entries/${id}/summarize`, { method: "POST" })
   ,translateEntry: (id: string) => request<{ job_id: string }>(`/api/entries/${id}/translate`, { method: "POST" })
   ,getArtifacts: (id: string) => request<AIArtifact[]>(`/api/entries/${id}/artifacts`)
+  ,getAIJob: (id: string) => request<AIJob>(`/api/ai/jobs/${id}`)
+  ,getJobArtifacts: (id: string) => request<AIArtifact[]>(`/api/ai/jobs/${id}/artifacts`)
+  ,digest: (body: { entry_ids?: string[]; feed_id?: string; folder_id?: string; limit?: number; workflow_name?: string }) => request<{ job_id: string; article_count?: number }>("/api/ai/digests", { method: "POST", body: JSON.stringify(body) })
 };

@@ -44,6 +44,8 @@ class Feed(Base):
     title: Mapped[str] = mapped_column(String(512))
     feed_url: Mapped[str | None] = mapped_column(Text)
     site_url: Mapped[str | None] = mapped_column(Text)
+    auto_translate_override: Mapped[bool | None] = mapped_column(Boolean)
+    auto_summary_override: Mapped[bool | None] = mapped_column(Boolean)
     folder_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("folders.id"))
     folder: Mapped[Folder | None] = relationship(back_populates="feeds")
     entries: Mapped[list[Entry]] = relationship(back_populates="feed")

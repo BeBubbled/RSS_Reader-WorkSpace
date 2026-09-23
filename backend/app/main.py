@@ -34,9 +34,13 @@ from app.reader import (
     list_entries,
     save_reading_position,
 )
-from app.ai import DigestIn, FunctionIn, ModelIn, PolicyIn, ProviderIn, provider_out, queue_digest_job, queue_entry_job, seed_functions
+from app.ai import DigestIn, FunctionIn, ModelIn, PolicyIn, ProviderIn, provider_out, queue_digest_job, queue_entry_job, seed_functions, test_provider_connection
 from app.models import AIArtifact, AIFunction, AIJob, AIModel, AIProvider, AppSetting, Notification, RoutingPolicy, Workflow
 import json
+
+
+def _artifact_out(item: AIArtifact) -> dict:
+    return {"id": str(item.id), "artifact_type": item.artifact_type, "language": item.language, "content_markdown": item.content_markdown, "content_json": item.content_json}
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -237,7 +241,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def test_provider(provider_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)) -> dict:
         item=await session.get(AIProvider,provider_id)
         if not item: raise HTTPException(404,"Provider not found")
-        item.health_status="healthy" if item.enabled else "disabled";await session.commit();return provider_out(item)
+        test_ok, detail = await test_provider_connection(item)
+        item.health_status="healthy" if test_ok else "unhealthy";await session.commit()
+        result = provider_out(item); result["test_ok"] = test_ok; result["test_detail"] = detail; return result
     @app.get("/api/ai/models")
     async def ai_models(user: CurrentUser = Depends(get_current_user),session: AsyncSession = Depends(get_session)) -> list[dict]: return [{"id":str(x.id),"provider_id":str(x.provider_id),"model_key":x.model_key,"display_name":x.display_name,"capabilities_json":json.loads(x.capabilities_json),"enabled":x.enabled} for x in (await session.scalars(select(AIModel))).all()]
     @app.post("/api/ai/models")
@@ -287,7 +293,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not items: raise HTTPException(422,"No articles selected")
         return {"job_id":str((await queue_digest_job(session,items,payload.workflow_name)).id),"article_count":len(items)}
     @app.get("/api/entries/{entry_id}/artifacts")
-    async def artifacts(entry_id:uuid.UUID,user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->list[dict]: return [{"id":str(x.id),"artifact_type":x.artifact_type,"language":x.language,"content_markdown":x.content_markdown,"content_json":x.content_json} for x in (await session.scalars(select(AIArtifact).where(AIArtifact.entry_id==entry_id,AIArtifact.is_current==True))).all()]
+    async def artifacts(entry_id:uuid.UUID,user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->list[dict]:
+        return [_artifact_out(x) for x in (await session.scalars(select(AIArtifact).where(AIArtifact.entry_id==entry_id,AIArtifact.is_current==True))).all()]
+    @app.get("/api/ai/jobs/{job_id}/artifacts")
+    async def job_artifacts(job_id:uuid.UUID,user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->list[dict]:
+        job=await session.get(AIJob,job_id)
+        if not job: raise HTTPException(404,"Job not found")
+        return [_artifact_out(x) for x in (await session.scalars(select(AIArtifact).where(AIArtifact.job_id==job_id,AIArtifact.is_current==True))).all()]
     @app.get("/api/notifications")
     async def notifications(user:CurrentUser=Depends(get_current_user),session:AsyncSession=Depends(get_session))->list[dict]: return [{"id":str(x.id),"title":x.title,"body":x.body,"is_read":x.is_read} for x in (await session.scalars(select(Notification).order_by(Notification.created_at.desc()))).all()]
     @app.get("/api/settings/ai")
